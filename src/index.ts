@@ -1,6 +1,19 @@
 /**
- * This is the persona and set of rules for our AI assistant.
+ * LLM Chat Application Template
+ *
+ * A simple chat application using Cloudflare Workers AI.
+ * This template demonstrates how to implement an LLM-powered chat interface with
+ * streaming responses using Server-Sent Events (SSE).
+ *
+ * @license MIT
  */
+import { Env, ChatMessage } from "./types";
+
+// Model ID for Workers AI model
+// https://developers.cloudflare.com/workers-ai/models/
+const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+// SVTR 专属的、详细的系统提示
 const SYSTEM_PROMPT = `你是由【SVTR 硅谷科技评论】打造的AI创投助手。
 
 关于我们: 硅谷科技评论（SVTR，Silicon Valley Technology Review）是由Allen Liu在ChatGPT问世之际，在硅谷创立的一家领先的科技媒体和创投服务平台，专注于人工智能（AI）领域的投资分析、行业研究和资源对接。我们的使命是通过深度洞察和专业服务，连接全球顶级的AI创业者、投资人和行业专家。我们的核心业务包括【AI创投库】、【AI创投会】和【AI创投营】。
@@ -8,57 +21,86 @@ const SYSTEM_PROMPT = `你是由【SVTR 硅谷科技评论】打造的AI创投�
 你的职责:
 1.  **专业回答**: 以SVTR的专业视角，回答用户关于AI行业趋势、创业公司分析、风险投资动态等问题。
 2.  **身份一致**: 在所有回答中，都以“SVTR的AI助手”身份进行交流。当提到“我们”时，指的是“SVTR 硅谷科技评论”。
-3.  **数据驱动**: 严格根据知识库上下文进行回答。如果知识库没有相关信息，请回答“根据我们现有的资料，我无法回答这个问题”，不要使用外部知识。
-4.  **引导用户**: 在适当的时候，向用户介绍SVTR的相关服务。`;
+3.  **数据驱动**: 优先使用我们知识库（通过RAG系统提供）中的信息进行回答。如果知识库没有相关信息，可以谨慎使用你的通用知识，但需声明该信息非SVTR官方数据。
+4.  **引导用户**: 在适当的时候，向用户介绍SVTR的相关服务，例如，当用户问及寻找投资机会时，可以引导他们关注我们的【AI创投榜】和【AI创投库】。`;
 
-// This is the main entry point for your Cloudflare Worker.
 export default {
-	async fetch(request, env, ctx) {
-		try {
-			const requestData = await request.json();
-			const userQuery = requestData.messages[requestData.messages.length - 1].content;
+  /**
+   * Main request handler for the Worker
+   */
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    const url = new URL(request.url);
 
-			if (!userQuery) {
-				return new Response('Missing query in request body', { status: 400 });
-			}
-   
-            const finalQueryForAutoRAG = `
-                ${SYSTEM_PROMPT}
+    // Handle static assets (frontend)
+    if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
+      return env.ASSETS.fetch(request);
+    }
 
-                ---
-                请严格遵循以上角色和职责设定，并基于你的知识库，回答以下用户问题:
-                "${userQuery}"
-            `;
+    // API Routes
+    if (url.pathname === "/api/chat") {
+      // Handle POST requests for chat
+      if (request.method === "POST") {
+        return handleChatRequest(request, env);
+      }
 
-			console.log(`Calling AutoRAG via Service Binding...`);
+      // Method not allowed for other request types
+      return new Response("Method not allowed", { status: 405 });
+    }
 
-            // --- THIS IS THE NEW, SIMPLER WAY TO CALL AUTORAG ---
-            // It uses the AI binding directly. No URL, no Token needed.
-            // Note: This method does not stream the response.
-            const response = await env.AI.autorag("svtr-knowledge-base-ai")
-                                       .run({ query: finalQueryForAutoRAG });
-            
-            // --- END OF NEW METHOD ---
+    // Handle 404 for unmatched routes
+    return new Response("Not found", { status: 404 });
+  },
+} satisfies ExportedHandler<Env>;
 
-            // The frontend expects a streaming format, so we simulate one with the final answer.
-            const stream = new ReadableStream({
-                start(controller) {
-                  const message = JSON.stringify({ response: response.response || "Sorry, I could not generate a response." });
-                  controller.enqueue(`data: ${message}\n\n`);
-                  controller.close();
-                },
-              });
-      
-            return new Response(stream, {
-                headers: { 'Content-Type': 'text/event-stream' },
-            });
+/**
+ * Handles chat API requests
+ */
+async function handleChatRequest(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  try {
+    // Parse JSON request body
+    const { messages = [] } = (await request.json()) as {
+      messages: ChatMessage[];
+    };
 
-		} catch (e) {
-			console.error("Error in main fetch handler:", e);
-			return new Response(JSON.stringify({ error: e.message }), { 
-                status: 500,
-                headers: { 'Content-Type': 'application/json' }
-            });
-		}
-	},
-};
+    // Add system prompt if not present
+    if (!messages.some((msg) => msg.role === "system")) {
+      messages.unshift({ role: "system", content: SYSTEM_PROMPT });
+    }
+
+    const response = await env.AI.run(
+      MODEL_ID,
+      {
+        messages,
+        max_tokens: 1024,
+      },
+      {
+        returnRawResponse: true,
+        // Uncomment to use AI Gateway
+        // gateway: {
+        //   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
+        //   skipCache: false,      // Set to true to bypass cache
+        //   cacheTtl: 3600,        // Cache time-to-live in seconds
+        // },
+      },
+    );
+
+    // Return streaming response
+    return response;
+  } catch (error) {
+    console.error("Error processing chat request:", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to process request" }),
+      {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }
+}
