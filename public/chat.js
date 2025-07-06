@@ -1,3 +1,5 @@
+// public/chat.js
+
 /**
  * LLM Chat App Frontend
  *
@@ -15,7 +17,7 @@ let chatHistory = [
   {
     role: "assistant",
     content:
-      "Hello! I'm an LLM chat app powered by Cloudflare Workers AI. How can I help you today?",
+      "Hello! I'm an LLM chat app powered by SVTR AI. How can I help you today?",
   },
 ];
 let isProcessing = false;
@@ -65,9 +67,6 @@ async function sendMessage() {
   chatHistory.push({ role: "user", content: message });
 
   try {
-    // ======================= 核心变更开始 =======================
-    // The streaming logic has been replaced with JSON handling.
-
     // Send request to API
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -81,17 +80,17 @@ async function sendMessage() {
 
     // Handle errors
     if (!response.ok) {
-      // Try to get error message from response body
       const errorData = await response.json();
       throw new Error(errorData.error || "Failed to get response from server.");
     }
 
-    // Process the complete JSON response instead of a stream
+    // Process the complete JSON response
     const responseData = await response.json();
 
-    // Extract the AI's message from the JSON response.
-    // Cloudflare AutoRAG's response is typically in `result.response`.
-    const aiMessage = responseData.result?.response;
+    // ======================= 最终修复！=======================
+    // 根据您截图的真实数据，AI的回答直接在 responseData.response 中
+    const aiMessage = responseData.response;
+    // =========================================================
 
     if (!aiMessage) {
       throw new Error("Invalid response format from AI.");
@@ -103,8 +102,6 @@ async function sendMessage() {
     // Add completed response to chat history
     chatHistory.push({ role: "assistant", content: aiMessage });
     
-    // ======================= 核心变更结束 =======================
-
   } catch (error) {
     console.error("Error:", error);
     addMessageToChat(
@@ -129,7 +126,6 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
   const messageEl = document.createElement("div");
   messageEl.className = `message ${role}-message`;
-  // Create a <p> tag to safely insert text content, preventing HTML injection
   const p = document.createElement("p");
   p.textContent = content;
   messageEl.appendChild(p);
