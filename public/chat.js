@@ -1,8 +1,15 @@
-// public/chat.js -> sendMessage 函数
+// public/chat.js
 
 async function sendMessage() {
+  // ======================= 新的调试代码 =======================
+  console.log("sendMessage function was called!");
+  // ==========================================================
+
   const message = userInput.value.trim();
   if (message === "" || isProcessing) return;
+
+  // ... 函数的其余部分保持不变 ...
+}
 
   isProcessing = true;
   userInput.disabled = true;
