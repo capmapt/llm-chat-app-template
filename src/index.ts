@@ -1,32 +1,14 @@
-/**
- * LLM Chat Application Template
- *
- * A simple chat application using Cloudflare Workers AI.
- * This template demonstrates how to implement an LLM-powered chat interface with
- * streaming responses using Server-Sent Events (SSE).
- *
- * @license MIT
- */
+// src/index.ts
+
 import { Env, ChatMessage } from "./types";
 
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-
-// SVTR 专属的、详细的系统提示
-const SYSTEM_PROMPT = `你是由【SVTR 硅谷科技评论】打造的AI创投助手。
-
-关于我们: 硅谷科技评论（SVTR，Silicon Valley Technology Review）是由Allen Liu在ChatGPT问世之际，在硅谷创立的一家领先的科技媒体和创投服务平台，专注于人工智能（AI）领域的投资分析、行业研究和资源对接。我们的使命是通过深度洞察和专业服务，连接全球顶级的AI创业者、投资人和行业专家。我们的核心业务包括【AI创投库】、【AI创投会】和【AI创投营】。
-
-你的职责:
-1.  **专业回答**: 以SVTR的专业视角，回答用户关于AI行业趋势、创业公司分析、风险投资动态等问题。
-2.  **身份一致**: 在所有回答中，都以“SVTR的AI助手”身份进行交流。当提到“我们”时，指的是“SVTR 硅谷科技评论”。
-3.  **数据驱动**: 优先使用我们知识库（通过RAG系统提供）中的信息进行回答。如果知识库没有相关信息，可以谨慎使用你的通用知识，但需声明该信息非SVTR官方数据。
-4.  **引导用户**: 在适当的时候，向用户介绍SVTR的相关服务，例如，当用户问及寻找投资机会时，可以引导他们关注我们的【AI创投榜】和【AI创投库】。`;
+// 变更：MODEL_ID 和 SYSTEM_PROMPT 不再需要，可以安全删除
+// const MODEL_ID = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// const SYSTEM_PROMPT = `...`;
 
 export default {
   /**
-   * Main request handler for the Worker
+   * Worker 的主请求处理器
    */
   async fetch(
     request: Request,
@@ -35,68 +17,71 @@ export default {
   ): Promise<Response> {
     const url = new URL(request.url);
 
-    // Handle static assets (frontend)
+    // 静态资源（前端页面）的处理逻辑保持不变
     if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
       return env.ASSETS.fetch(request);
     }
 
-    // API Routes
+    // API 路由逻辑保持不变
     if (url.pathname === "/api/chat") {
-      // Handle POST requests for chat
       if (request.method === "POST") {
+        // 我们将修改 handleChatRequest 函数来使用 AutoRAG
         return handleChatRequest(request, env);
       }
-
-      // Method not allowed for other request types
       return new Response("Method not allowed", { status: 405 });
     }
 
-    // Handle 404 for unmatched routes
     return new Response("Not found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
 
+
 /**
- * Handles chat API requests
+ * 处理聊天 API 请求 (已更新为使用 AutoRAG)
  */
 async function handleChatRequest(
   request: Request,
   env: Env,
 ): Promise<Response> {
   try {
-    // Parse JSON request body
+    // 从请求体中解析消息数组
     const { messages = [] } = (await request.json()) as {
       messages: ChatMessage[];
     };
 
-    // Add system prompt if not present
-    if (!messages.some((msg) => msg.role === "system")) {
-      messages.unshift({ role: "system", content: SYSTEM_PROMPT });
+    // --- 变更 1: 从消息历史中提取最后一个用户问题作为查询 ---
+    // AutoRAG 只需要用户的当前问题，而不是整个对话历史
+    const lastUserMessage = messages.findLast(msg => msg.role === 'user');
+
+    if (!lastUserMessage || !lastUserMessage.content) {
+      return new Response(
+        JSON.stringify({ error: "未找到有效的用户消息" }),
+        { status: 400, headers: { "content-type": "application/json" } }
+      );
     }
+    const query = lastUserMessage.content;
 
-    const response = await env.AI.run(
-      MODEL_ID,
-      {
-        messages,
-        max_tokens: 1024,
-      },
-      {
-        returnRawResponse: true,
-        // Uncomment to use AI Gateway
-        // gateway: {
-        //   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
-        //   skipCache: false,      // Set to true to bypass cache
-        //   cacheTtl: 3600,        // Cache time-to-live in seconds
-        // },
-      },
-    );
+    // --- 变更 2: 不再需要手动添加系统提示 ---
+    // AutoRAG 会在后台根据您的知识库自动构建上下文
 
-    // Return streaming response
-    return response;
+
+    // --- 变更 3: 将 AI 调用从 .run() 切换为 .autorag().aiSearch() ---
+    const response = await env.AI.autorag("svtr-knowledge-base-ai").aiSearch({
+      query: query
+    });
+
+
+    // --- 变更 4: 直接返回 AutoRAG 生成的 JSON 响应 ---
+    // AutoRAG 返回的是一个完整的JSON对象，而不是流
+    return new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
   } catch (error) {
-    console.error("Error processing chat request:", error);
+    console.error("处理聊天请求时出错:", error);
     return new Response(
-      JSON.stringify({ error: "Failed to process request" }),
+      JSON.stringify({ error: "处理请求失败" }),
       {
         status: 500,
         headers: { "content-type": "application/json" },
