@@ -65,14 +65,8 @@ async function sendMessage() {
   chatHistory.push({ role: "user", content: message });
 
   try {
-    // Create new assistant response element
-    const assistantMessageEl = document.createElement("div");
-    assistantMessageEl.className = "message assistant-message";
-    assistantMessageEl.innerHTML = "<p></p>";
-    chatMessages.appendChild(assistantMessageEl);
-
-    // Scroll to bottom
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // ======================= 核心变更开始 =======================
+    // The streaming logic has been replaced with JSON handling.
 
     // Send request to API
     const response = await fetch("/api/chat", {
@@ -87,50 +81,35 @@ async function sendMessage() {
 
     // Handle errors
     if (!response.ok) {
-      throw new Error("Failed to get response");
+      // Try to get error message from response body
+      const errorData = await response.json();
+      throw new Error(errorData.error || "Failed to get response from server.");
     }
 
-    // Process streaming response
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let responseText = "";
+    // Process the complete JSON response instead of a stream
+    const responseData = await response.json();
 
-    while (true) {
-      const { done, value } = await reader.read();
+    // Extract the AI's message from the JSON response.
+    // Cloudflare AutoRAG's response is typically in `result.response`.
+    const aiMessage = responseData.result?.response;
 
-      if (done) {
-        break;
-      }
-
-      // Decode chunk
-      const chunk = decoder.decode(value, { stream: true });
-
-      // Process SSE format
-      const lines = chunk.split("\n");
-      for (const line of lines) {
-        try {
-          const jsonData = JSON.parse(line);
-          if (jsonData.response) {
-            // Append new content to existing text
-            responseText += jsonData.response;
-            assistantMessageEl.querySelector("p").textContent = responseText;
-
-            // Scroll to bottom
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-          }
-        } catch (e) {
-          console.error("Error parsing JSON:", e);
-        }
-      }
+    if (!aiMessage) {
+      throw new Error("Invalid response format from AI.");
     }
+    
+    // Add the AI's complete message to the chat
+    addMessageToChat("assistant", aiMessage);
 
     // Add completed response to chat history
-    chatHistory.push({ role: "assistant", content: responseText });
+    chatHistory.push({ role: "assistant", content: aiMessage });
+    
+    // ======================= 核心变更结束 =======================
+
   } catch (error) {
     console.error("Error:", error);
     addMessageToChat(
       "assistant",
-      "Sorry, there was an error processing your request.",
+      `Sorry, there was an error: ${error.message}`,
     );
   } finally {
     // Hide typing indicator
@@ -150,7 +129,11 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
   const messageEl = document.createElement("div");
   messageEl.className = `message ${role}-message`;
-  messageEl.innerHTML = `<p>${content}</p>`;
+  // Create a <p> tag to safely insert text content, preventing HTML injection
+  const p = document.createElement("p");
+  p.textContent = content;
+  messageEl.appendChild(p);
+  
   chatMessages.appendChild(messageEl);
 
   // Scroll to bottom
