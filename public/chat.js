@@ -1,15 +1,49 @@
-// public/chat.js
+/**
+ * LLM Chat App Frontend
+ *
+ * Handles the chat UI interactions and communication with the backend API.
+ */
 
+// DOM elements
+const chatMessages = document.getElementById("chat-messages");
+const userInput = document.getElementById("user-input");
+const sendButton = document.getElementById("send-button");
+const typingIndicator = document.getElementById("typing-indicator");
+
+// Chat state
+let chatHistory = [
+  {
+    role: "assistant",
+    content:
+      "Hello! I'm an LLM chat app powered by SVTR AI. How can I help you today?",
+  },
+];
+let isProcessing = false;
+
+// Auto-resize textarea as user types
+userInput.addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = this.scrollHeight + "px";
+});
+
+// Send message on Enter (without Shift)
+userInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+// Send button click handler - This is where the function is correctly assigned without 'await'
+sendButton.addEventListener("click", sendMessage);
+
+/**
+ * Sends a message to the chat API and processes the response.
+ * This function is correctly declared as 'async' so 'await' can be used inside it.
+ */
 async function sendMessage() {
-  // ======================= 新的调试代码 =======================
-  console.log("sendMessage function was called!");
-  // ==========================================================
-
   const message = userInput.value.trim();
   if (message === "" || isProcessing) return;
-
-  // ... 函数的其余部分保持不变 ...
-}
 
   isProcessing = true;
   userInput.disabled = true;
@@ -21,14 +55,12 @@ async function sendMessage() {
   chatHistory.push({ role: "user", content: message });
 
   try {
-    // 创建一个新的、空的助手消息元素
     const assistantMessageEl = document.createElement("div");
     assistantMessageEl.className = "message assistant-message";
     assistantMessageEl.innerHTML = "<p></p>";
     chatMessages.appendChild(assistantMessageEl);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
-    // 发送请求
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -37,7 +69,6 @@ async function sendMessage() {
 
     if (!response.ok) { throw new Error("Failed to get response"); }
 
-    // --- 改回流式处理逻辑 ---
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let responseText = "";
@@ -47,7 +78,7 @@ async function sendMessage() {
       if (done) break;
       
       const chunk = decoder.decode(value);
-      const lines = chunk.split("\n\n"); // SSE 事件由两个换行符分隔
+      const lines = chunk.split("\n\n");
 
       for (const line of lines) {
         if (line.startsWith("data: ")) {
@@ -63,7 +94,7 @@ async function sendMessage() {
               chatMessages.scrollTop = chatMessages.scrollHeight;
             }
           } catch (e) {
-            // 忽略JSON解析错误，因为最后一块可能是 [DONE]
+            // Ignore parsing errors for non-JSON parts of the stream
           }
         }
       }
@@ -81,4 +112,18 @@ async function sendMessage() {
     sendButton.disabled = false;
     userInput.focus();
   }
+}
+
+/**
+ * Helper function to add message to chat
+ */
+function addMessageToChat(role, content) {
+  const messageEl = document.createElement("div");
+  messageEl.className = `message ${role}-message`;
+  const p = document.createElement("p");
+  p.textContent = content;
+  messageEl.appendChild(p);
+  
+  chatMessages.appendChild(messageEl);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
 }
