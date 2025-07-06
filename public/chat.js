@@ -1,32 +1,4 @@
-// public/chat.js (调试版本)
-
-/**
- * LLM Chat App Frontend
- *
- * Handles the chat UI interactions and communication with the backend API.
- */
-
-// DOM elements
-const chatMessages = document.getElementById("chat-messages");
-const userInput = document.getElementById("user-input");
-const sendButton = document.getElementById("send-button");
-const typingIndicator = document.getElementById("typing-indicator");
-
-// Chat state
-let chatHistory = [
-  {
-    role: "assistant",
-    content:
-      "Hello! I'm an LLM chat app powered by SVTR AI. How can I help you today?",
-  },
-];
-let isProcessing = false;
-
-// ... (其他事件监听器的代码保持不变) ...
-userInput.addEventListener("input", function () { this.style.height = "auto"; this.style.height = this.scrollHeight + "px"; });
-userInput.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
-sendButton.addEventListener("click", sendMessage);
-
+// public/chat.js -> sendMessage 函数
 
 async function sendMessage() {
   const message = userInput.value.trim();
@@ -35,7 +7,6 @@ async function sendMessage() {
   isProcessing = true;
   userInput.disabled = true;
   sendButton.disabled = true;
-
   addMessageToChat("user", message);
   userInput.value = "";
   userInput.style.height = "auto";
@@ -43,37 +14,59 @@ async function sendMessage() {
   chatHistory.push({ role: "user", content: message });
 
   try {
+    // 创建一个新的、空的助手消息元素
+    const assistantMessageEl = document.createElement("div");
+    assistantMessageEl.className = "message assistant-message";
+    assistantMessageEl.innerHTML = "<p></p>";
+    chatMessages.appendChild(assistantMessageEl);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // 发送请求
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: chatHistory }),
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || "Failed to get response from server.");
+    if (!response.ok) { throw new Error("Failed to get response"); }
+
+    // --- 改回流式处理逻辑 ---
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let responseText = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value);
+      const lines = chunk.split("\n\n"); // SSE 事件由两个换行符分隔
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const dataChunk = line.substring(6);
+            if (dataChunk.trim() === "[DONE]") {
+                break;
+            }
+            const jsonData = JSON.parse(dataChunk);
+            if (jsonData.response) {
+              responseText += jsonData.response;
+              assistantMessageEl.querySelector("p").textContent = responseText;
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+          } catch (e) {
+            // 忽略JSON解析错误，因为最后一块可能是 [DONE]
+          }
+        }
+      }
     }
 
-    const responseData = await response.json();
-
-    // ======================= 新的调试代码 =======================
-    // 我们在这里将收到的数据打印到控制台，并设置一个断点
-    console.log("收到的完整响应数据 (Received Full Response Data):", responseData);
-    debugger; // 如果开发者工具打开着，代码会在这里暂停
-    // ==========================================================
-
-    const aiMessage = responseData.response;
-
-    if (!aiMessage) {
-      throw new Error("Invalid response format from AI.");
-    }
-
-    addMessageToChat("assistant", aiMessage);
-    chatHistory.push({ role: "assistant", content: aiMessage });
+    chatHistory.push({ role: "assistant", content: responseText });
 
   } catch (error) {
     console.error("Error:", error);
-    addMessageToChat("assistant", `Sorry, there was an error: ${error.message}`);
+    addMessageToChat("assistant", "Sorry, there was an error processing your request.");
   } finally {
     typingIndicator.classList.remove("visible");
     isProcessing = false;
@@ -81,14 +74,4 @@ async function sendMessage() {
     sendButton.disabled = false;
     userInput.focus();
   }
-}
-
-function addMessageToChat(role, content) {
-  const messageEl = document.createElement("div");
-  messageEl.className = `message ${role}-message`;
-  const p = document.createElement("p");
-  p.textContent = content;
-  messageEl.appendChild(p);
-  chatMessages.appendChild(messageEl);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
 }
